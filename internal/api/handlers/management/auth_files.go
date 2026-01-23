@@ -3,6 +3,8 @@ package management
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -747,6 +749,72 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	return err
 }
 
+// PatchAuthFileStatus toggles the disabled state of an auth file
+func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Disabled *bool  `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	if req.Disabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "disabled is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Find auth by name or ID
+	var targetAuth *coreauth.Auth
+	if auth, ok := h.authManager.GetByID(name); ok {
+		targetAuth = auth
+	} else {
+		auths := h.authManager.List()
+		for _, auth := range auths {
+			if auth.FileName == name {
+				targetAuth = auth
+				break
+			}
+		}
+	}
+
+	if targetAuth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
+		return
+	}
+
+	// Update disabled state
+	targetAuth.Disabled = *req.Disabled
+	if *req.Disabled {
+		targetAuth.Status = coreauth.StatusDisabled
+		targetAuth.StatusMessage = "disabled via management API"
+	} else {
+		targetAuth.Status = coreauth.StatusActive
+		targetAuth.StatusMessage = ""
+	}
+	targetAuth.UpdatedAt = time.Now()
+
+	if _, err := h.authManager.Update(ctx, targetAuth); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
+}
+
 func (h *Handler) disableAuth(ctx context.Context, id string) {
 	if h == nil || h.authManager == nil {
 		return
@@ -1383,9 +1451,16 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 		claims, _ := codex.ParseJWTToken(tokenResp.IDToken)
 		email := ""
 		accountID := ""
+		planType := ""
 		if claims != nil {
 			email = claims.GetUserEmail()
 			accountID = claims.GetAccountID()
+			planType = strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType)
+		}
+		hashAccountID := ""
+		if accountID != "" {
+			digest := sha256.Sum256([]byte(accountID))
+			hashAccountID = hex.EncodeToString(digest[:])[:8]
 		}
 		// Build bundle compatible with existing storage
 		bundle := &codex.CodexAuthBundle{
@@ -1402,10 +1477,11 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
+		fileName := codex.CredentialFileName(tokenStorage.Email, planType, hashAccountID, true)
 		record := &coreauth.Auth{
-			ID:       fmt.Sprintf("codex-%s.json", tokenStorage.Email),
+			ID:       fileName,
 			Provider: "codex",
-			FileName: fmt.Sprintf("codex-%s.json", tokenStorage.Email),
+			FileName: fileName,
 			Storage:  tokenStorage,
 			Metadata: map[string]any{
 				"email":      tokenStorage.Email,
@@ -2110,7 +2186,20 @@ func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage
 			finalProjectID := projectID
 			if responseProjectID != "" {
 				if explicitProject && !strings.EqualFold(responseProjectID, projectID) {
-					log.Warnf("Gemini onboarding returned project %s instead of requested %s; keeping requested project ID.", responseProjectID, projectID)
+					// Check if this is a free user (gen-lang-client projects or free/legacy tier)
+					isFreeUser := strings.HasPrefix(projectID, "gen-lang-client-") ||
+						strings.EqualFold(tierID, "FREE") ||
+						strings.EqualFold(tierID, "LEGACY")
+
+					if isFreeUser {
+						// For free users, use backend project ID for preview model access
+						log.Infof("Gemini onboarding: frontend project %s maps to backend project %s", projectID, responseProjectID)
+						log.Infof("Using backend project ID: %s (recommended for preview model access)", responseProjectID)
+						finalProjectID = responseProjectID
+					} else {
+						// Pro users: keep requested project ID (original behavior)
+						log.Warnf("Gemini onboarding returned project %s instead of requested %s; keeping requested project ID.", responseProjectID, projectID)
+					}
 				} else {
 					finalProjectID = responseProjectID
 				}
