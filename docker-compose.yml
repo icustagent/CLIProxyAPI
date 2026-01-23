@@ -11,7 +11,7 @@ services:
     ports:
       - "8317:8317"
     volumes:
-      - cliproxyapi_data:/tmp
+      - ./cliproxyapi_data:/tmp
     networks:
       - cliproxyapi
       - apinetwork
@@ -23,7 +23,7 @@ services:
     env_file:
       - .env
     volumes:
-      - cliproxyapi_postgres:/var/lib/postgresql/data
+      - ./cliproxyapi_postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cliproxy -d cliproxy"]
       interval: 10s
@@ -37,7 +37,3 @@ networks:
     name: cliproxyapi
   apinetwork:
     name: apinetwork
-
-volumes:
-  cliproxyapi_data:
-  cliproxyapi_postgres:
