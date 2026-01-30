@@ -12,8 +12,8 @@ services:
     container_name: cliproxyapi
     env_file:
       - .env
-    environment:
-      DEPLOY: ${DEPLOY:-}
+    # environment:
+    #   DEPLOY: ${DEPLOY:-}
     ports:
       - "8317:8317"
       - "8085:8085"
