@@ -1,49 +1,28 @@
 services:
-  cliproxyapi:
-    image: eceasy/cli-proxy-api:latest
-    container_name: cliproxyapi
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    pull_policy: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: cli-proxy-api
+    # env_file:
+    #   - .env
     environment:
-      TZ: ${TZ}
-      MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD}
-      MANAGEMENT_STATIC_PATH: ${MANAGEMENT_STATIC_PATH}
-      PGSTORE_LOCAL_PATH: ${PGSTORE_LOCAL_PATH}
-      PGSTORE_DSN: ${PGSTORE_DSN}
-#      HTTP_PROXY: ${HTTP_PROXY}
-#      HTTPS_PROXY: ${HTTPS_PROXY}
-#      NO_PROXY: ${NO_PROXY}
+      DEPLOY: ${DEPLOY:-}
     ports:
       - "8317:8317"
+      - "8085:8085"
+      - "1455:1455"
+      - "54545:54545"
+      - "51121:51121"
+      - "11451:11451"
     volumes:
-      - ./cliproxyapi_data:/tmp
-    networks:
-      - cliproxyapi
-      - apinetwork
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: cliproxyapi_postgres
+      - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      TZ: ${TZ}
-    volumes:
-      - ./cliproxyapi_postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cliproxy -d cliproxy"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - cliproxyapi
-
-networks:
-  cliproxyapi:
-    name: cliproxyapi
-  apinetwork:
-    name: apinetwork
